@@ -28,10 +28,13 @@ mjvCamera camera;
 mjvScene scene;
 mjvOption option;
 
-image_transport::Publisher camera_image_pub;
-image_transport::Publisher depth_image_pub;
-cv::Mat pub_img;
-cv::Mat depth_img;
+// image_transport::Publisher camera_image_pub;
+// image_transport::Publisher depth_image_pub;
+image_transport::Publisher camL_pub;
+image_transport::Publisher camR_pub;
+
+// cv::Mat pub_img;
+// cv::Mat depth_img;
 
 ros::Publisher color_cloud_pub;
 pcl::PointCloud<pcl::PointXYZRGB>::Ptr color_cloud(new pcl::PointCloud<pcl::PointXYZRGB>);
@@ -154,11 +157,42 @@ void loadmodel(void)
     std::cout << " MODEL LOADED " << std::endl;
 }
 
+// render and publish image from specified camera
+void renderAndPublish(
+    const std::string& cam_name,
+    mjModel* model,
+    mjData* data,
+    mjvCamera& rgbd_camera,
+    mjvOption& sensor_option,
+    mjvScene& sensor_scene,
+    mjrContext& sensor_context,
+    mjrRect& viewport,
+    RGBD_mujoco& mj_RGBD,
+    image_transport::Publisher& cam_pub)
+{
+    rgbd_camera.fixedcamid = mj_name2id(model, mjOBJ_CAMERA, cam_name.c_str());
+    mj_RGBD.set_camera_intrinsics(model, rgbd_camera, viewport);
+    mjv_updateScene(model, data, &sensor_option, NULL, &rgbd_camera, mjCAT_ALL, &sensor_scene);
+    mjr_render(viewport, &sensor_scene, &sensor_context);
+    mj_RGBD.get_RGBD_buffer(model, viewport, &sensor_context);
+
+    cv::Mat pub_img = mj_RGBD.get_color_image();
+    cv::Mat resized;
+    cv::resize(pub_img, resized, cv::Size(640, 480));
+
+    sensor_msgs::ImagePtr msg = cv_bridge::CvImage(std_msgs::Header(), "rgb8", resized).toImageMsg();
+    msg->header.stamp = ros::Time::now();
+    msg->header.frame_id = cam_name;
+
+    cam_pub.publish(msg);
+}
+
 // void RGBD_sensor(mjModel* model, mjData* data, string* camera_name, string* pub_topic_name, string* sub_topic_name)
-void RGBD_sensor(mjModel* model, mjData* data)
+void RGBD_sensor(mjModel* model, mjData* data, const std::string& cam_name)
 {
   glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
-  GLFWwindow* window = glfwCreateWindow(640, 480, "Camera", NULL, NULL);
+  GLFWwindow* window = glfwCreateWindow(640, 480, cam_name.c_str(), NULL, NULL);
+
   // glfwSetWindowAttrib(window, GLFW_RESIZABLE, GLFW_FALSE);
   glfwMakeContextCurrent(window);
   glfwSwapInterval(1);
@@ -166,7 +200,7 @@ void RGBD_sensor(mjModel* model, mjData* data)
   // setup camera
   mjvCamera rgbd_camera;
   rgbd_camera.type = mjCAMERA_FIXED;
-  rgbd_camera.fixedcamid = mj_name2id(model, mjOBJ_CAMERA, "camera");
+//   rgbd_camera.fixedcamid = mj_name2id(model, mjOBJ_CAMERA, "camera");
 
 //   std::cout << "debugging111" << std::endl;
   
@@ -192,40 +226,34 @@ void RGBD_sensor(mjModel* model, mjData* data)
     mjrRect viewport = {0,0,0,0};
     glfwGetFramebufferSize(window, &viewport.width, &viewport.height);
     
-    mj_RGBD.set_camera_intrinsics(model, rgbd_camera, viewport);
+    renderAndPublish(cam_name.c_str(), model, data, rgbd_camera, sensor_option, sensor_scene, sensor_context, viewport, mj_RGBD, camL_pub);
 
-    // update scene and render
-    mjv_updateScene(model, data, &sensor_option, NULL, &rgbd_camera, mjCAT_ALL, &sensor_scene);
-    mjr_render(viewport, &sensor_scene, &sensor_context);
+    // // for 1 camera
+    // mtx.lock();
 
-    mj_RGBD.get_RGBD_buffer(model, viewport, &sensor_context);
-
-    mtx.lock();
-
-
-    pub_img = mj_RGBD.get_color_image();
-    depth_img = mj_RGBD.get_depth_image();
-    ros::Time img_capture_time = ros::Time::now();
-    if(pub_img.empty())
-    {
-        ROS_ERROR("Could not read the image.");
-        // return -1;
-    }
-    else
-    {
-        ////CAMERA img publish
-        // cv::Mat resized_img;
-        // cv::Size desired_size(480, 640); // 원하는 크기 지정하세요 FOV는 .xml에서..
-        // cv::resize(pub_img, resized_img, desired_size);
-        // img_msg = cv_bridge::CvImage(std_msgs::Header(), "rgb8", resized_img).toImageMsg();
-        img_msg = cv_bridge::CvImage(std_msgs::Header(), "rgb8", pub_img).toImageMsg();
-        depth_msg = cv_bridge::CvImage(std_msgs::Header(), "32FC1", depth_img).toImageMsg();
-        img_msg->header.stamp = img_capture_time;
-        depth_msg->header.stamp = img_capture_time;
-        camera_image_pub.publish(img_msg);
-        depth_image_pub.publish(depth_msg);
-        img_updated = true;
-    }
+    // pub_img = mj_RGBD.get_color_image();
+    // depth_img = mj_RGBD.get_depth_image();
+    // ros::Time img_capture_time = ros::Time::now();
+    // if(pub_img.empty())
+    // {
+    //     ROS_ERROR("Could not read the image.");
+    //     // return -1;
+    // }
+    // else
+    // {
+    //     ////CAMERA img publish
+    //     // cv::Mat resized_img;
+    //     // cv::Size desired_size(480, 640); // 원하는 크기 지정하세요 FOV는 .xml에서..
+    //     // cv::resize(pub_img, resized_img, desired_size);
+    //     // img_msg = cv_bridge::CvImage(std_msgs::Header(), "rgb8", resized_img).toImageMsg();
+    //     img_msg = cv_bridge::CvImage(std_msgs::Header(), "rgb8", pub_img).toImageMsg();
+    //     depth_msg = cv_bridge::CvImage(std_msgs::Header(), "32FC1", depth_img).toImageMsg();
+    //     img_msg->header.stamp = img_capture_time;
+    //     depth_msg->header.stamp = img_capture_time;
+    //     camera_image_pub.publish(img_msg);
+    //     depth_image_pub.publish(depth_msg);
+    //     img_updated = true;
+    // }
 
     ////OBJ POSE
     body_id = -1;
@@ -259,13 +287,13 @@ void RGBD_sensor(mjModel* model, mjData* data)
 
     mtx.unlock();
 
-    mtx.lock();
-    *color_cloud = mj_RGBD.generate_color_pointcloud();
-    pcl::toROSMsg(*color_cloud, color_cloud_msg);
-    color_cloud_msg.header.frame_id = "Camera";
-    color_cloud_msg.header.stamp = img_capture_time;
-    color_cloud_pub.publish(color_cloud_msg);
-    mtx.unlock();
+    // mtx.lock();
+    // *color_cloud = mj_RGBD.generate_color_pointcloud();
+    // pcl::toROSMsg(*color_cloud, color_cloud_msg);
+    // color_cloud_msg.header.frame_id = "Camera";
+    // color_cloud_msg.header.stamp = img_capture_time;
+    // color_cloud_pub.publish(color_cloud_msg);
+    // mtx.unlock();
 
     // Swap OpenGL buffers
     glfwSwapBuffers(window);
@@ -367,9 +395,11 @@ int main(int argc, char **argv)
     sim_command_pub = nh.advertise<std_msgs::String>("/mujoco_ros_interface/sim_command_sim2con", 1);
 
     image_transport::ImageTransport it(nh);
-    camera_image_pub = it.advertise("/mujoco_ros_interface/camera/image", 1);
-    depth_image_pub = it.advertise("/mujoco_ros_interface/camera/depth", 1);
-    color_cloud_pub = nh.advertise<sensor_msgs::PointCloud2>("/mujoco_ros_interface/camera/color_cloud", 1);
+    camL_pub = it.advertise("/mujoco_ros_interface/cam_L/image", 1);
+    camR_pub = it.advertise("/mujoco_ros_interface/cam_R/image", 1);
+    // camera_image_pub = it.advertise("/mujoco_ros_interface/camera/image", 1);
+    // depth_image_pub = it.advertise("/mujoco_ros_interface/camera/depth", 1);
+    // color_cloud_pub = nh.advertise<sensor_msgs::PointCloud2>("/mujoco_ros_interface/camera/color_cloud", 1);
 
     std::string actionServerName = "/imageRequestAction";
     ImageRequestAction action(actionServerName);
@@ -450,8 +480,8 @@ int main(int argc, char **argv)
     ROS_INFO("debugging--Hi");
     // // start simulation thread
     std::thread simthread(simulate);
-    std::thread visual_thread;
-    // std::thread visual_thread2;
+    std::thread visual_thread1;
+    std::thread visual_thread2;
 
     // event loop
     while ((!glfwWindowShouldClose(window) && !settings.exitrequest) && ros::ok())
@@ -463,9 +493,8 @@ int main(int argc, char **argv)
         {
             ROS_INFO("Load Request");
             loadmodel();
-            visual_thread = std::thread(RGBD_sensor, m, d);
-            //TODO
-            // visual_thread2 = std::thread(RGBD_sensor, m, d, "camera2");
+            visual_thread1 = std::thread(RGBD_sensor, m, d, "cam_L");
+            visual_thread2 = std::thread(RGBD_sensor, m, d, "cam_R");
         }
         else if (settings.loadrequest > 1)
             settings.loadrequest = 1;
@@ -489,8 +518,8 @@ int main(int argc, char **argv)
     // stop simulation thread
     settings.exitrequest = 1;
     simthread.join();
-    visual_thread.join();
-    // visual_thread2.join();
+    visual_thread1.join();
+    visual_thread2.join();
 
     // delete everything we allocated
     uiClearCallback(window);
